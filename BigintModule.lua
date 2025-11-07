@@ -29,8 +29,8 @@
 ]]
 
 local Bigint = {}
-local libVer = "1.2-ROBLOX_LUAU"
-local libDate = "10/6/2025"
+local libVer = "1.3-ROBLOX_LUAU"
+local libDate = "7/11/2025"
 local outputMode = 1 --0 = tohex, 1 = tohexf, 2 = tointstr
 
 local function outputError(func, inputs, message)
@@ -445,34 +445,18 @@ end
 
 --BASIC MATH
 
-function Bigint.add(a: {number}, b: {number}): {number}
-	local output = {}
+function Bigint.add(a, b)
+	local out = {}
 	local carry = 0
-	local minLen = math.min(#a, #b)
-	for i = 1, minLen do
-		local sum = a[i] + b[i] + carry
-		output[i] = sum % 0x1000000
-		carry = math.floor(sum * 5.960464477539063e-8)
-	end
-	
-	if #a > #b then
-		for i = minLen + 1, #a do
-			local sum = a[i] + carry
-			output[#output + 1] = sum % 0x1000000
-			carry = math.floor(sum * 5.960464477539063e-8)
-		end
-	elseif #a < #b then
-		for i = minLen + 1, #b do
-			local sum = b[i] + carry
-			output[#output + 1] = sum % 0x1000000
-			carry = math.floor(sum * 5.960464477539063e-8)
-		end
+	for i = 1, math.max(#a, #b) do
+		out[i] = (a[i] or 0) + (b[i] or 0) + carry
+		carry = out[i] // 0x1000000
+		out[i] -= carry * 0x1000000
 	end
 	if carry > 0 then
-		output[#output + 1] = carry
+		out[#out + 1] = 1
 	end
-	
-	return addmeta(output)
+	return addmeta(out)
 end
 
 function Bigint.subabs(a: {number}, b: {number}): {number}
@@ -551,28 +535,86 @@ function Bigint.sub(a: {number}, b: {number}): {number}
 	return Bigint.strip(output)
 end
 
-function Bigint.mul(a: {number}, b: {number}): {number}
-	local long = (#a > #b and a) or b
-	local short = (#a > #b and b) or a
+function Bigint.mul(a, b)
+	local function karat(a, b)
+		if #a <= 50 or #b <= 50 then
+			local out = {}
+			local carry = 0
 
-	local out = {}
-	local carry = 0
-	for digit = 1, #short + #long - 1 do
-		local digitTotal = carry
-		carry = 0
-		for index = math.max(1, digit-#short+1), math.min(digit, #long) do
-			digitTotal += short[digit - index + 1] * long[index]
-			if digitTotal >= 0x1000000 then
-				carry += digitTotal // 0x1000000
-				digitTotal %= 0x1000000
+			for i = 0, #a + #b - 2 do
+				out[i+1] = carry
+				carry = 0
+				for j = math.max(i - #b + 1, 0), math.min(i, #a - 1) do
+					out[i+1] += a[j + 1] * b[i - j + 1]
+					carry += out[i+1] // 0x1000000
+					out[i+1] %= 0x1000000
+				end
 			end
+			if carry > 0 then
+				out[#out + 1] = carry
+			end
+			return out
 		end
-		out[digit] = digitTotal
+
+		local splitIndex = math.ceil(math.max(#a, #b) / 2)
+		local a1, a2, b1, b2, aSum, bSum = {}, {}, {}, {}, {}, {}
+		local aCarry, bCarry = 0, 0
+
+		table.move(a, 1, splitIndex, 1, a1)
+		table.move(a, splitIndex + 1, #a, 1, a2)
+		table.move(b, 1, splitIndex, 1, b1)
+		table.move(b, splitIndex + 1, #b, 1, b2)
+
+		for i = 1, #a1 do
+			aSum[i] = a1[i] + (a2[i] or 0) + aCarry
+			aCarry = aSum[i] // 0x1000000
+			aSum[i] -= aCarry * 0x1000000
+		end
+
+		for i = 1, #b1 do
+			bSum[i] = b1[i] + (b2[i] or 0) + bCarry
+			bCarry = bSum[i] // 0x1000000
+			bSum[i] -= bCarry * 0x1000000
+		end
+
+		if aCarry > 0 then
+			aSum[splitIndex + 1] = aCarry
+		end
+		if bCarry > 0 then
+			bSum[splitIndex + 1] = bCarry
+		end
+
+		local z0 = karat(a1, b1)
+		local z2 = karat(a2, b2)
+		local z3 = karat(aSum, bSum)
+
+		local z1 = {}
+		local carry = 0
+		for i = 1, #z3 - 1 do
+			z1[i] = z3[i] - (z2[i] or 0) - (z0[i] or 0) + carry
+			carry = z1[i] // 0x1000000
+			z1[i] -= carry * 0x1000000
+		end
+		local msb = z3[#z3] - (z2[#z3] or 0) - (z0[#z3] or 0) + carry
+		if msb > 0 then
+			z1[#z3] = msb
+		end
+
+		local prod = {}
+		carry = 0
+
+		for i = 1, #a + #b do
+			prod[i] = (z0[i] or 0) + (z1[i - splitIndex] or 0) + (z2[i - splitIndex * 2] or 0) + carry
+			carry = prod[i] // 0x1000000
+			prod[i] -= carry * 0x1000000
+		end
+		if carry > 0 then
+			prod[splitIndex * 2 + #z2 + 1] = carry
+		end
+
+		return prod
 	end
-	if carry > 0 then
-		out[#out + 1] = carry
-	end
-	return addmeta(out)
+	return addmeta(karat(a, b))
 end
 
 function Bigint.idiv(a: {number}, b: {number}): {number}
